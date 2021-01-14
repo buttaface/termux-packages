@@ -1,74 +1,72 @@
-commit d42869c1e6fbb5caf87428662825840b2e70a19d
+From da97439135976c67fc07ffe3b71022261d457693 Mon Sep 17 00:00:00 2001
 Date: Thu, 29 Oct 2020 20:54:59 +0530
-Subject: [android] Move to the NDK's unified sysroot
+Subject: [PATCH] [android] Move to the NDK's unified sysroot
 
-Since the NDK is removing the platforms/ and sysroot/ directories in the next
-release, switch to the unified sysroot in toolchains/llvm/ and take advantage
-of a bunch of simplification that's now possible.
+Since the NDK removes the platforms/ and sysroot/ directories in the latest NDK
+22, switch to the unified sysroot in toolchains/llvm/ and take advantage of a
+bunch of simplification that's now possible.
 
 diff --git a/swift/cmake/modules/AddSwift.cmake b/swift/cmake/modules/AddSwift.cmake
-index 0e019d8d30..00e0b794e7 100644
+index fb3485dc539d..d2d34bacc819 100644
 --- a/swift/cmake/modules/AddSwift.cmake
 +++ b/swift/cmake/modules/AddSwift.cmake
-@@ -123,6 +123,10 @@ function(_add_variant_c_compile_link_flags)
-     endif()
+@@ -82,6 +82,10 @@ function(_add_host_variant_c_compile_link_flags name)
+     set(DEPLOYMENT_VERSION "${SWIFT_SDK_${SWIFT_HOST_VARIANT_SDK}_DEPLOYMENT_VERSION}")
    endif()
  
-+  if("${CFLAGS_SDK}" STREQUAL "ANDROID")
++  if(SWIFT_HOST_VARIANT_SDK STREQUAL ANDROID)
 +    set(DEPLOYMENT_VERSION ${SWIFT_ANDROID_API_LEVEL})
 +  endif()
 +
    # MSVC, clang-cl, gcc don't understand -target.
-   if(CMAKE_C_COMPILER_ID MATCHES "^Clang|AppleClang$" AND
-       NOT SWIFT_COMPILER_IS_MSVC_LIKE)
-@@ -343,16 +343,6 @@ function(_add_host_variant_c_compile_flags)
-      list(APPEND result -funwind-tables)
+   if(CMAKE_C_COMPILER_ID MATCHES "Clang" AND NOT SWIFT_COMPILER_IS_MSVC_LIKE)
+     get_target_triple(target target_variant "${SWIFT_HOST_VARIANT_SDK}" "${SWIFT_HOST_VARIANT_ARCH}"
+@@ -271,18 +275,6 @@ function(_add_host_variant_c_compile_flags target)
+     target_compile_options(${target} PRIVATE -funwind-tables)
    endif()
  
--  if("${CFLAGS_SDK}" STREQUAL "ANDROID")
--    list(APPEND result -nostdinc++)
+-  if(SWIFT_HOST_VARIANT_SDK STREQUAL ANDROID)
+-    target_compile_options(${target} PRIVATE -nostdinc++)
 -    swift_android_libcxx_include_paths(CFLAGS_CXX_INCLUDES)
--    swift_android_include_for_arch("${CFLAGS_ARCH}" "${CFLAGS_ARCH}_INCLUDE")
--    foreach(path IN LISTS CFLAGS_CXX_INCLUDES ${CFLAGS_ARCH}_INCLUDE)
--      list(APPEND result "SHELL:${CMAKE_INCLUDE_SYSTEM_FLAG_C}${path}")
--    endforeach()
--    list(APPEND result "-D__ANDROID_API__=${SWIFT_ANDROID_API_LEVEL}")
+-    swift_android_include_for_arch("${SWIFT_HOST_VARIANT_ARCH}"
+-      "${SWIFT_HOST_VARIANT_ARCH}_INCLUDE")
+-    target_include_directories(${target} SYSTEM PRIVATE
+-      ${CFLAGS_CXX_INCLUDES}
+-      ${${SWIFT_HOST_VARIANT_ARCH}_INCLUDE})
+-    target_compile_definitions(${target} PRIVATE
+-      __ANDROID_API__=${SWIFT_ANDROID_API_LEVEL})
 -  endif()
 -
-   if("${CFLAGS_SDK}" STREQUAL "LINUX")
-     if(${CFLAGS_ARCH} STREQUAL x86_64)
-       # this is the minimum architecture that supports 16 byte CAS, which is necessary to avoid a dependency to libatomic
-@@ -441,11 +431,6 @@ function(_add_host_variant_link_flags)
-     list(APPEND link_libraries
-       ${SWIFT_ANDROID_${LFLAGS_ARCH}_ICU_I18N}
-       ${SWIFT_ANDROID_${LFLAGS_ARCH}_ICU_UC})
--
--    swift_android_lib_for_arch(${LFLAGS_ARCH} ${LFLAGS_ARCH}_LIB)
--    foreach(path IN LISTS ${LFLAGS_ARCH}_LIB)
--      list(APPEND library_search_directories ${path})
--    endforeach()
-   else()
-     # If lto is enabled, we need to add the object path flag so that the LTO code
-     # generator leaves the intermediate object file in a place where it will not
+   if(SWIFT_HOST_VARIANT_SDK STREQUAL "LINUX")
+     if(SWIFT_HOST_VARIANT_ARCH STREQUAL x86_64)
+       # this is the minimum architecture that supports 16 byte CAS, which is
+@@ -350,7 +342,7 @@ function(_add_host_variant_link_flags target)
+     target_link_libraries(${target} PRIVATE
+       ${cxx_link_libraries})
+ 
+-    swift_android_lib_for_arch(${SWIFT_HOST_VARIANT_ARCH}
++    swift_android_libgcc_for_arch_cross_compile(${SWIFT_HOST_VARIANT_ARCH}
+       ${SWIFT_HOST_VARIANT_ARCH}_LIB)
+     target_link_directories(${target} PRIVATE
+       ${${SWIFT_HOST_VARIANT_ARCH}_LIB})
 diff --git a/swift/cmake/modules/AddSwiftUnittests.cmake b/swift/cmake/modules/AddSwiftUnittests.cmake
-index e088997741..daaba3e026 100644
+index aff795346e6c..f631429a536b 100644
 --- a/swift/cmake/modules/AddSwiftUnittests.cmake
 +++ b/swift/cmake/modules/AddSwiftUnittests.cmake
-@@ -43,9 +43,6 @@ function(add_swift_unittest test_dirname)
-     set_target_properties(${test_dirname} PROPERTIES
-       BUILD_RPATH ${SWIFT_LIBRARY_OUTPUT_INTDIR}/swift/macosx)
+@@ -48,7 +48,7 @@ function(add_swift_unittest test_dirname)
+       COMMAND "${SWIFT_SOURCE_DIR}/utils/swift-rpathize.py"
+               "$<TARGET_FILE:${test_dirname}>")
    elseif("${SWIFT_HOST_VARIANT}" STREQUAL "android")
 -    swift_android_lib_for_arch(${SWIFT_HOST_VARIANT_ARCH} android_system_libs)
--    set_property(TARGET "${test_dirname}" APPEND PROPERTY LINK_DIRECTORIES
--      "${android_system_libs}")
++    swift_android_libgcc_for_arch_cross_compile(${SWIFT_HOST_VARIANT_ARCH} android_system_libs)
+     set_property(TARGET "${test_dirname}" APPEND PROPERTY LINK_DIRECTORIES
+       "${android_system_libs}")
      set_property(TARGET "${test_dirname}" APPEND PROPERTY LINK_LIBRARIES "log")
-   elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux")
-     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|AMD64")
 diff --git a/swift/cmake/modules/SwiftAndroidSupport.cmake b/swift/cmake/modules/SwiftAndroidSupport.cmake
-index 9379031947..a8b0a48c7e 100644
+index 9379031947d3..c56404ca88ea 100644
 --- a/swift/cmake/modules/SwiftAndroidSupport.cmake
 +++ b/swift/cmake/modules/SwiftAndroidSupport.cmake
-@@ -1,72 +1,42 @@
+@@ -1,72 +1,50 @@
 -function(swift_android_libcxx_include_paths var)
 -  if(NOT "${SWIFT_ANDROID_NDK_PATH}" STREQUAL "")
 -    set(${var}
@@ -94,25 +92,22 @@ index 9379031947..a8b0a48c7e 100644
  endfunction()
  
 -function(swift_android_include_for_arch arch var)
--  set(paths)
-+function(swift_android_sysroot sysroot_var_name)
++function(swift_android_libgcc_for_arch_cross_compile arch var)
+   set(paths)
    if(NOT "${SWIFT_ANDROID_NDK_PATH}" STREQUAL "")
 -    list(APPEND paths
 -         "${SWIFT_ANDROID_NDK_PATH}/sources/android/support/include"
 -         "${SWIFT_ANDROID_NDK_PATH}/sysroot/usr/include"
 -         "${SWIFT_ANDROID_NDK_PATH}/sysroot/usr/include/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}")
-+    swift_android_prebuilt_host_name(prebuilt_build)
-+    set(${sysroot_var_name} "${SWIFT_ANDROID_NDK_PATH}/toolchains/llvm/prebuilt/${prebuilt_build}/sysroot" PARENT_SCOPE)
-   elseif(NOT "${SWIFT_ANDROID_NATIVE_SYSROOT}" STREQUAL "")
+-  elseif(NOT "${SWIFT_ANDROID_NATIVE_SYSROOT}" STREQUAL "")
 -    list(APPEND paths
 -         "${SWIFT_ANDROID_NATIVE_SYSROOT}/usr/include"
 -         "${SWIFT_ANDROID_NATIVE_SYSROOT}/usr/include/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}")
-+    set(${sysroot_var_name} "${SWIFT_ANDROID_NATIVE_SYSROOT}" PARENT_SCOPE)
-   else()
+-  else()
 -    message(SEND_ERROR "Couldn't set ${arch} include paths for Android")
-+    message(SEND_ERROR "Couldn't find Android sysroot")
++    list(APPEND paths "${SWIFT_SDK_ANDROID_ARCH_${arch}_PATH}/../lib/gcc/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}/${SWIFT_ANDROID_NDK_GCC_VERSION}.x")
    endif()
--  set(${var} ${paths} PARENT_SCOPE)
+   set(${var} ${paths} PARENT_SCOPE)
  endfunction()
  
 -function(swift_android_lib_for_arch arch var)
@@ -120,7 +115,7 @@ index 9379031947..a8b0a48c7e 100644
 -  set(_host "${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}")
 -
 -  set(paths)
-+function(swift_android_tools_path arch path_var_name)
++function(swift_android_sysroot sysroot_var_name)
    if(NOT "${SWIFT_ANDROID_NDK_PATH}" STREQUAL "")
 -    if(arch STREQUAL armv7)
 -      list(APPEND paths "${_prebuilt}/${_host}/lib/armv7-a")
@@ -130,20 +125,13 @@ index 9379031947..a8b0a48c7e 100644
 -      list(APPEND paths "${_prebuilt}/${_host}/lib")
 -    elseif(arch STREQUAL x86_64)
 -      list(APPEND paths "${_prebuilt}/${_host}/lib64")
-+    swift_android_prebuilt_host_name(prebuilt_build)
-+    if("${arch}" STREQUAL "i686")
-+      set(ndk_prebuilt_path
-+        "${SWIFT_ANDROID_NDK_PATH}/toolchains/x86-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${prebuilt_build}")
-+    elseif("${arch}" STREQUAL "x86_64")
-+      set(ndk_prebuilt_path
-+        "${SWIFT_ANDROID_NDK_PATH}/toolchains/x86_64-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${prebuilt_build}")
-     else()
+-    else()
 -      message(SEND_ERROR "unknown architecture (${arch}) for android")
-+      set(ndk_prebuilt_path
-+        "${SWIFT_ANDROID_NDK_PATH}/toolchains/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${prebuilt_build}")
-     endif()
+-    endif()
 -    list(APPEND paths "${_prebuilt}/lib/gcc/${_host}/${SWIFT_ANDROID_NDK_GCC_VERSION}.x")
--  elseif(NOT "${SWIFT_ANDROID_NATIVE_SYSROOT}" STREQUAL "")
++    swift_android_prebuilt_host_name(prebuilt_build)
++    set(${sysroot_var_name} "${SWIFT_ANDROID_NDK_PATH}/toolchains/llvm/prebuilt/${prebuilt_build}/sysroot" PARENT_SCOPE)
+   elseif(NOT "${SWIFT_ANDROID_NATIVE_SYSROOT}" STREQUAL "")
 -    list(APPEND paths "${SWIFT_ANDROID_NATIVE_SYSROOT}/usr/lib")
 -    if("${arch}" MATCHES armv7)
 -      list(APPEND paths "/system/lib")
@@ -152,21 +140,35 @@ index 9379031947..a8b0a48c7e 100644
 -    else()
 -      message(SEND_ERROR "unknown architecture (${arch}) when compiling for Android host")
 -    endif()
--  else()
++    set(${sysroot_var_name} "${SWIFT_ANDROID_NATIVE_SYSROOT}" PARENT_SCOPE)
+   else()
 -    message(SEND_ERROR "Couldn't set ${arch} library paths for Android")
--  endif()
++    message(SEND_ERROR "Couldn't find Android sysroot")
+   endif()
 -
 -  set(${var} ${paths} PARENT_SCOPE)
--endfunction()
+ endfunction()
  
--function(swift_android_tools_path arch path_var_name)
--  if(NOT "${SWIFT_ANDROID_NDK_PATH}" STREQUAL "")
+ function(swift_android_tools_path arch path_var_name)
+   if(NOT "${SWIFT_ANDROID_NDK_PATH}" STREQUAL "")
 -    set(${path_var_name} "${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_PREBUILT_PATH}/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}/bin" PARENT_SCOPE)
++    swift_android_prebuilt_host_name(prebuilt_build)
++    if("${arch}" STREQUAL "i686")
++      set(ndk_prebuilt_path
++        "${SWIFT_ANDROID_NDK_PATH}/toolchains/x86-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${prebuilt_build}")
++    elseif("${arch}" STREQUAL "x86_64")
++      set(ndk_prebuilt_path
++        "${SWIFT_ANDROID_NDK_PATH}/toolchains/x86_64-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${prebuilt_build}")
++    else()
++      set(ndk_prebuilt_path
++        "${SWIFT_ANDROID_NDK_PATH}/toolchains/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}-${SWIFT_ANDROID_NDK_GCC_VERSION}/prebuilt/${prebuilt_build}")
++    endif()
++
 +    set(${path_var_name} "${ndk_prebuilt_path}/${SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE}/bin" PARENT_SCOPE)
    elseif(NOT "${SWIFT_ANDROID_NATIVE_SYSROOT}" STREQUAL "")
      set(${path_var_name} "${SWIFT_ANDROID_NATIVE_SYSROOT}/usr/bin" PARENT_SCOPE)
    else()
-@@ -77,19 +49,7 @@ endfunction ()
+@@ -77,19 +55,7 @@ endfunction ()
  function(swift_android_cxx_libraries_for_arch arch libraries_var_name)
    set(link_libraries)
    if(NOT "${SWIFT_ANDROID_NDK_PATH}" STREQUAL "")
@@ -188,10 +190,10 @@ index 9379031947..a8b0a48c7e 100644
                                 ${android_libcxx_path}/libc++_shared.so)
    elseif(NOT "${SWIFT_ANDROID_NATIVE_SYSROOT}" STREQUAL "")
 diff --git a/swift/cmake/modules/SwiftConfigureSDK.cmake b/swift/cmake/modules/SwiftConfigureSDK.cmake
-index b55e6e6b98..a654794467 100644
+index 37a0a06a1011..4d9bb77b1a24 100644
 --- a/swift/cmake/modules/SwiftConfigureSDK.cmake
 +++ b/swift/cmake/modules/SwiftConfigureSDK.cmake
-@@ -55,12 +55,6 @@ function(_report_sdk prefix)
+@@ -54,12 +54,6 @@ function(_report_sdk prefix)
      if(NOT "${SWIFT_ANDROID_NATIVE_SYSROOT}" STREQUAL "")
        message(STATUS " Sysroot: ${SWIFT_ANDROID_NATIVE_SYSROOT}")
      endif()
@@ -204,7 +206,7 @@ index b55e6e6b98..a654794467 100644
    else()
      foreach(arch ${SWIFT_SDK_${prefix}_ARCHITECTURES})
        message(STATUS "  ${arch} Path: ${SWIFT_SDK_${prefix}_ARCH_${arch}_PATH}")
-@@ -271,76 +265,32 @@ macro(configure_sdk_unix name architectures)
+@@ -273,76 +267,32 @@ macro(configure_sdk_unix name architectures)
  
    foreach(arch ${architectures})
      if("${prefix}" STREQUAL "ANDROID")
@@ -232,9 +234,9 @@ index b55e6e6b98..a654794467 100644
 -        else()
 -          message(SEND_ERROR "Couldn't find SWIFT_SDK_ANDROID_ARCH_armv7_PATH")
 -        endif()
-         set(SWIFT_SDK_ANDROID_ARCH_${arch}_TRIPLE "armv7-none-linux-androideabi")
+         set(SWIFT_SDK_ANDROID_ARCH_${arch}_TRIPLE "armv7-unknown-linux-androideabi")
          # The Android ABI isn't part of the module triple.
-         set(SWIFT_SDK_ANDROID_ARCH_${arch}_MODULE "armv7-none-linux-android")
+         set(SWIFT_SDK_ANDROID_ARCH_${arch}_MODULE "armv7-unknown-linux-android")
        elseif("${arch}" STREQUAL "aarch64")
          set(SWIFT_SDK_ANDROID_ARCH_${arch}_NDK_TRIPLE "aarch64-linux-android")
          set(SWIFT_SDK_ANDROID_ARCH_${arch}_ALT_SPELLING "aarch64")
@@ -285,11 +287,111 @@ index b55e6e6b98..a654794467 100644
      else()
        set(SWIFT_SDK_${prefix}_ARCH_${arch}_PATH "/" CACHE STRING "CMAKE_SYSROOT for ${prefix} ${arch}")
  
+diff --git a/swift/docs/Android.md b/swift/docs/Android.md
+index 69a8741c85d7..0e12e99f2244 100644
+--- a/swift/docs/Android.md
++++ b/swift/docs/Android.md
+@@ -1,8 +1,8 @@
+ # Getting Started with Swift on Android
+ 
+-The Swift stdlib can be compiled for Android armv7 and aarch64 targets, which
+-makes it possible to execute Swift code on a mobile device running Android.
+-This guide explains:
++The Swift stdlib can be compiled for Android armv7, x86_64, and aarch64 targets,
++which makes it possible to execute Swift code on a mobile device running
++Android or an emulator. This guide explains:
+ 
+ 1. How to run a simple "Hello, world" program on your Android device.
+ 2. How to run the Swift test suite on an Android device.
+@@ -29,16 +29,16 @@ Swift-to-Java bridging.
+ 
+ To follow along with this guide, you'll need:
+ 
+-1. A Linux environment capable of building Swift from source, specifically
++1. A Linux environment capable of building Swift from source, preferably
+    Ubuntu 18.04 or Ubuntu 16.04. Before attempting to build for Android,
+    please make sure you are able to build for Linux by following the
+    instructions in the Swift project README.
+-2. The latest version of the Android NDK (r21 at the time of this writing),
+-   available to download here:
++2. The latest version of the Android NDK (r21d at the time of this writing,
++   only r19 or later are supported), available to download here:
+    https://developer.android.com/ndk/downloads/index.html.
+-3. An Android device with remote debugging enabled. We require remote
+-   debugging in order to deploy built stdlib products to the device. You may
+-   turn on remote debugging by following the official instructions:
++3. An Android device with remote debugging enabled or the emulator. We require
++   remote debugging in order to deploy built stdlib products to the device. You
++   may turn on remote debugging by following the official instructions:
+    https://developer.chrome.com/devtools/docs/remote-debugging.
+ 
+ ## "Hello, world" on Android
+@@ -73,12 +73,12 @@ Android NDK, as well as the directories that contain the `libicuucswift.so` and
+ 
+ ```
+ $ ARM_DIR=path/to/libicu-libiconv-android
+-$ NDK_PATH=path/to/android-ndk21
++$ NDK_PATH=path/to/android-ndk-r21d
+ $ utils/build-script \
+     -R \                                       # Build in ReleaseAssert mode.
+     --android \                                # Build for Android.
+     --android-ndk $NDK_PATH \                  # Path to an Android NDK.
+-    --android-arch armv7 \                     # Optionally specify Android architecture, alternately aarch64
++    --android-arch armv7 \                     # Optionally specify Android architecture, alternately aarch64 or x86_64
+     --android-api-level 21 \                   # The Android API level to target. Swift only supports 21 or greater.
+     --android-icu-uc ${ARM_DIR}/libicuucswift.so \
+     --android-icu-uc-include ${ARM_DIR}/icu/source/common \
+@@ -99,13 +99,13 @@ Then use the built Swift compiler from the previous step to compile a Swift
+ source file, targeting Android:
+ 
+ ```
+-$ NDK_PATH="path/to/android-ndk21"
+-$ build/Ninja-ReleaseAssert/swift-linux-x86_64/bin/swiftc \     # The Swift compiler built in the previous step.
+-                                                                # The location of the tools used to build Android binaries
++$ NDK_PATH="path/to/android-ndk-r21d"
++$ build/Ninja-ReleaseAssert/swift-linux-x86_64/bin/swiftc \          # The Swift compiler built in the previous step
++                                                                     # The location of the tools used to build Android binaries
+     -tools-directory ${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/bin/ \
+-    -target armv7a-unknown-linux-androideabi \                  # Targeting android-armv7, and supply the path to libgcc.
+-    -L ${NDK_PATH}/toolchains/arm-linux-androideabi-4.9/prebuilt/linux-x86_64/lib/gcc/arm-linux-androideabi/4.9.x/armv7-a \
+-    -sdk ${NDK_PATH}/platforms/android-21/arch-arm \            # Use the same architecture and API version as you used to build the stdlib in the previous step.
++    -target armv7a-unknown-linux-androideabi21 \                     # Targeting Android armv7 at API 21
++    -sdk ${NDK_PATH}/toolchains/llvm/prebuilt/linux-x86_64/sysroot \ # The SDK is the Android unified sysroot and the resource-dir is where you just built the Swift stdlib.
++    -resource-dir build/Ninja-ReleaseAssert/swift-linux-x86_64/lib/swift
+     hello.swift
+ ```
+ 
+@@ -153,7 +153,7 @@ adb push /path/to/libicu-android/armeabi-v7a/libicuucswift.so /data/local/tmp
+ In addition, you'll also need to copy the Android NDK's libc++:
+ 
+ ```
+-$ adb push /path/to/android-ndk-r21/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/libc++_shared.so /data/local/tmp
++$ adb push /path/to/android-ndk-r21d/sources/cxx-stl/llvm-libc++/libs/armeabi-v7a/libc++_shared.so /data/local/tmp
+ ```
+ 
+ Finally, you'll need to copy the `hello` executable you built in the
+@@ -193,11 +193,11 @@ device. As in part four, you'll need to connect your Android device via USB:
+ 
+ ```
+ $ utils/build-script \
+-  -R \                                           # Build in ReleaseAssert mode.
+-  -T --host-test \                               # Run all tests, including on the Android host.
+-  --android \                                    # Build for Android.
+-  --android-ndk ~/android-ndk-r21 \              # Path to an Android NDK.
+-  --android-arch armv7 \                         # Optionally specify Android architecture, alternately aarch64
++  -R \                               # Build in ReleaseAssert mode.
++  -T \                               # Run all tests, including on the Android device (add --host-test to only run Android tests on the linux host).
++  --android \                        # Build for Android.
++  --android-ndk ~/android-ndk-r21d \ # Path to an Android NDK.
++  --android-arch armv7 \             # Optionally specify Android architecture, alternately aarch64
+   --android-ndk-version 21 \
+   --android-icu-uc ~/libicu-android/armeabi-v7a/libicuuc.so \
+   --android-icu-uc-include ~/libicu-android/armeabi-v7a/icu/source/common \
 diff --git a/swift/stdlib/cmake/modules/AddSwiftStdlib.cmake b/swift/stdlib/cmake/modules/AddSwiftStdlib.cmake
-index a2f682ece6..d2f6c27890 100644
+index 92cc40ff62b3..b5883b1c9060 100644
 --- a/swift/stdlib/cmake/modules/AddSwiftStdlib.cmake
 +++ b/swift/stdlib/cmake/modules/AddSwiftStdlib.cmake
-@@ -55,6 +55,10 @@ function(_add_target_variant_c_compile_link_flags)
+@@ -70,6 +70,10 @@ function(_add_target_variant_c_compile_link_flags)
      endif()
    endif()
  
@@ -300,7 +402,7 @@ index a2f682ece6..d2f6c27890 100644
    # MSVC, clang-cl, gcc don't understand -target.
    if(CMAKE_C_COMPILER_ID MATCHES "^Clang|AppleClang$" AND
        NOT SWIFT_COMPILER_IS_MSVC_LIKE)
-@@ -274,16 +278,6 @@ function(_add_target_variant_c_compile_flags)
+@@ -279,16 +283,6 @@ function(_add_target_variant_c_compile_flags)
       list(APPEND result -funwind-tables)
    endif()
  
@@ -317,23 +419,20 @@ index a2f682ece6..d2f6c27890 100644
    if("${CFLAGS_SDK}" STREQUAL "LINUX")
      if(${CFLAGS_ARCH} STREQUAL x86_64)
        # this is the minimum architecture that supports 16 byte CAS, which is necessary to avoid a dependency to libatomic
-@@ -363,11 +357,6 @@ function(_add_target_variant_link_flags)
-     list(APPEND link_libraries
+@@ -401,7 +395,7 @@ function(_add_target_variant_link_flags)
        ${SWIFT_ANDROID_${LFLAGS_ARCH}_ICU_I18N}
        ${SWIFT_ANDROID_${LFLAGS_ARCH}_ICU_UC})
--
+ 
 -    swift_android_lib_for_arch(${LFLAGS_ARCH} ${LFLAGS_ARCH}_LIB)
--    foreach(path IN LISTS ${LFLAGS_ARCH}_LIB)
--      list(APPEND library_search_directories ${path})
--    endforeach()
-   else()
-     # If lto is enabled, we need to add the object path flag so that the LTO code
-     # generator leaves the intermediate object file in a place where it will not
++    swift_android_libgcc_for_arch_cross_compile(${LFLAGS_ARCH} ${LFLAGS_ARCH}_LIB)
+     foreach(path IN LISTS ${LFLAGS_ARCH}_LIB)
+       list(APPEND library_search_directories ${path})
+     endforeach()
 diff --git a/swift/stdlib/cmake/modules/SwiftSource.cmake b/swift/stdlib/cmake/modules/SwiftSource.cmake
-index 41850e3f54..bb504ee93a 100644
+index 9e12c4504a28..21e90e30d7be 100644
 --- a/swift/stdlib/cmake/modules/SwiftSource.cmake
 +++ b/swift/stdlib/cmake/modules/SwiftSource.cmake
-@@ -184,9 +184,7 @@ function(_add_target_variant_swift_compile_flags
+@@ -200,9 +200,7 @@ function(_add_target_variant_swift_compile_flags
      ${ARGN})
  
    # On Windows, we don't set SWIFT_SDK_WINDOWS_PATH_ARCH_{ARCH}_PATH, so don't include it.
@@ -344,7 +443,7 @@ index 41850e3f54..bb504ee93a 100644
      list(APPEND result "-sdk" "${SWIFT_SDK_${sdk}_ARCH_${arch}_PATH}")
    endif()
  
-@@ -206,13 +204,6 @@ function(_add_target_variant_swift_compile_flags
+@@ -221,13 +219,6 @@ function(_add_target_variant_swift_compile_flags
          "-target" "${SWIFT_SDK_${sdk}_ARCH_${arch}_TRIPLE}")
    endif()
  
@@ -358,21 +457,172 @@ index 41850e3f54..bb504ee93a 100644
    if(NOT BUILD_STANDALONE)
      list(APPEND result "-resource-dir" "${SWIFTLIB_DIR}")
    endif()
+diff --git a/swift/test/Driver/print_target_info.swift b/swift/test/Driver/print_target_info.swift
+index 9bd9e149af5c..daedbd64857f 100644
+--- a/swift/test/Driver/print_target_info.swift
++++ b/swift/test/Driver/print_target_info.swift
+@@ -6,7 +6,7 @@
+ 
+ // RUN: %swift_driver -print-target-info -target x86_64-unknown-linux -static-executable | %FileCheck -check-prefix CHECK-LINUX-STATIC %s
+ // RUN: %swift_driver -print-target-info -target x86_64-unknown-linux -static-stdlib | %FileCheck -check-prefix CHECK-LINUX-STATIC %s
+-// RUN: %target-swift-frontend -print-target-info -target x86_64-unknown-linux -use-static-resource-dir | %FileCheck -check-prefix CHECK-LINUX-STATIC %s
++// RUN: %swift_frontend_plain -print-target-info -target x86_64-unknown-linux -use-static-resource-dir | %FileCheck -check-prefix CHECK-LINUX-STATIC %s
+ 
+ // RUN: %swift_driver -print-target-info -target x86_64-apple-macosx10.15 -target-variant x86_64-apple-ios13-macabi | %FileCheck -check-prefix CHECK-ZIPPERED %s
+ // RUN: %target-swift-frontend -print-target-info -target x86_64-apple-macosx10.15 -target-variant x86_64-apple-ios13-macabi | %FileCheck -check-prefix CHECK-ZIPPERED %s
+diff --git a/swift/test/lit.cfg b/swift/test/lit.cfg
+index cffea861f3f0..4185c548c7a3 100644
+--- a/swift/test/lit.cfg
++++ b/swift/test/lit.cfg
+@@ -1346,7 +1346,6 @@ elif run_os == 'linux-androideabi' or run_os == 'linux-android':
+                                                 aarch64="arm64-v8a")
+     ndk_platform_triple = get_architecture_value(armv7="arm-linux-androideabi",
+                                                  aarch64="aarch64-linux-android")
+-    toolchain_directory_name = "{}-{}".format(ndk_platform_triple, config.android_ndk_gcc_version)
+     if platform.system() == 'Linux':
+         prebuilt_directory = 'linux-x86_64'
+     elif platform.system() == 'Darwin':
+@@ -1359,8 +1358,8 @@ elif run_os == 'linux-androideabi' or run_os == 'linux-android':
+         prebuilt_directory = 'windows-x86_64'
+ 
+     toolchain_directory = make_path(
+-        config.android_ndk_path, "toolchains", toolchain_directory_name,
+-        "prebuilt", prebuilt_directory)
++        config.android_ndk_path, "toolchains", "llvm", "prebuilt",
++        prebuilt_directory)
+     tools_directory = shell_quote(make_path(
+         toolchain_directory, ndk_platform_triple, "bin"))
+     lit_config.note("Testing Android " + config.variant_triple)
+@@ -1370,36 +1369,21 @@ elif run_os == 'linux-androideabi' or run_os == 'linux-android':
+     config.target_runtime = "native"
+     config.target_swift_autolink_extract = inferSwiftBinary("swift-autolink-extract")
+     config.target_sdk_name = "android"
+-    android_link_paths_opt = "-L {} -L {} -L {}".format(
+-        shell_quote(make_path(
+-            config.android_ndk_path, "sources", "cxx-stl", "llvm-libc++",
+-            "libs", ndk_platform_tuple)),
++    android_link_paths_opt = "-L {}".format(
+         shell_quote(make_path(
+             toolchain_directory, "lib", "gcc", ndk_platform_triple,
+-            "{}.x".format(config.android_ndk_gcc_version))),
+-        shell_quote(make_path(
+-            toolchain_directory, ndk_platform_triple, "lib")))
+-    # Since NDK r14 the headers are unified under $NDK_PATH/sysroot, so the -sdk
+-    # switch is not enough. Additionally we have to include both the unified
+-    # sysroot, and the architecture sysroot.
+-    unified_android_include_path = shell_quote(make_path(
+-        config.android_ndk_path, "sysroot", "usr", "include"))
+-    architecture_android_include_path = shell_quote(make_path(
+-        config.android_ndk_path, "sysroot", "usr", "include",
+-        ndk_platform_triple))
+-    android_include_paths_opt = "-I {} -I {}".format(
+-        unified_android_include_path, architecture_android_include_path)
+-    # clang can use -isystem, but Swift cannot.
+-    android_include_system_paths_opt = "-isystem {} -isystem {}".format(
+-        unified_android_include_path, architecture_android_include_path)
++            "{}.x".format(config.android_ndk_gcc_version))))
++    resource_dir_opt = ("-resource-dir %s" % test_resource_dir)
++    # Since NDK r19, the headers and libraries are available in a unified
++    # sysroot at $NDK_PATH/toolchains/llvm/prebuilt/$prebuilt_directory/sysroot,
++    # so the -sdk switch can now be used.
+     config.target_build_swift = ' '.join([
+         config.swiftc,
+         '-target', config.variant_triple,
+-        '-Xcc', '--sysroot={}'.format(config.variant_sdk),
+-        '-Xclang-linker', '--sysroot={}'.format(config.variant_sdk),
++        '-sdk', config.variant_sdk, '-Xclang-linker',
++        '--target={}{}'.format(config.variant_triple, config.android_api_level),
+         '-tools-directory', tools_directory,
+-        android_include_paths_opt, android_link_paths_opt,
+-        '-use-ld=%s' % config.android_linker_name,
++        android_link_paths_opt, '-use-ld=%s' % config.android_linker_name,
+         resource_dir_opt, mcp_opt, config.swift_test_options,
+         config.swift_driver_test_options, swift_execution_tests_extra_flags])
+     config.target_codesign = "echo"
+@@ -1411,17 +1395,17 @@ elif run_os == 'linux-androideabi' or run_os == 'linux-android':
+     config.target_swift_frontend = ' '.join([
+         config.swift_frontend,
+         '-target', config.variant_triple,
+-        android_include_paths_opt, android_link_paths_opt,
+-        resource_dir_opt, mcp_opt, config.swift_test_options,
+-        config.swift_frontend_test_options])
++        '-sdk', config.variant_sdk, android_link_paths_opt, resource_dir_opt,
++        mcp_opt, config.swift_test_options, config.swift_frontend_test_options])
+     subst_target_swift_frontend_mock_sdk = config.target_swift_frontend
+     subst_target_swift_frontend_mock_sdk_after = ""
+     config.target_run = make_path(config.swift_src_root, 'utils', 'android', 'adb_test_runner.py')
+-    # FIXME: Include -sdk in this invocation.
++    # Use SDKROOT instead of -sdk because a couple tests set another -sdk and
++    # sil-opt errors if passed -sdk multiple times.
+     config.target_sil_opt = ' '.join([
++        'env', 'SDKROOT={}'.format(shell_quote(config.variant_sdk)),
+         config.sil_opt,
+         '-target', config.variant_triple,
+-        android_include_paths_opt,
+         resource_dir_opt, mcp_opt, config.sil_test_options])
+     subst_target_sil_opt_mock_sdk = config.target_sil_opt
+     subst_target_sil_opt_mock_sdk_after = ""
+@@ -1439,8 +1423,8 @@ elif run_os == 'linux-androideabi' or run_os == 'linux-android':
+         config.swiftc,
+         '-target', config.variant_triple,
+         '-toolchain-stdlib-rpath',
+-        '-Xcc', '--sysroot={}'.format(config.variant_sdk),
+-        '-Xclang-linker', '--sysroot={}'.format(config.variant_sdk),
++        '-sdk', config.variant_sdk, '-Xclang-linker',
++        '--target={}{}'.format(config.variant_triple, config.android_api_level),
+         '-tools-directory', tools_directory,
+         android_link_paths_opt, resource_dir_opt, mcp_opt,
+         '-use-ld=%s' % config.android_linker_name,
+@@ -1454,8 +1438,8 @@ elif run_os == 'linux-androideabi' or run_os == 'linux-android':
+     config.target_clang = ' '.join([
+         'clang++',
+         '-target', config.variant_triple,
+-        clang_mcp_opt, android_include_system_paths_opt,
+-        config.target_cc_options, '-fobjc-runtime=ios-5.0'])
++        clang_mcp_opt, '-isystem', config.variant_sdk, config.target_cc_options,
++        '-fobjc-runtime=ios-5.0'])
+     config.target_ld = ' '.join([
+         tools_directory,
+         '-L%s' % make_path(test_resource_dir, config.target_sdk_name)])
+diff --git a/swift/test/lit.site.cfg.in b/swift/test/lit.site.cfg.in
+index 4f6b0793d8c5..8c1209080094 100644
+--- a/swift/test/lit.site.cfg.in
++++ b/swift/test/lit.site.cfg.in
+@@ -43,6 +43,7 @@ config.darwin_xcrun_toolchain = "@SWIFT_DARWIN_XCRUN_TOOLCHAIN@"
+ # --- android ---
+ config.android_ndk_path = "@SWIFT_ANDROID_NDK_PATH@"
+ config.android_ndk_gcc_version = "@SWIFT_ANDROID_NDK_GCC_VERSION@"
++config.android_api_level = "@SWIFT_ANDROID_API_LEVEL@"
+ 
+ # --- Windows ---
+ msvc_runtime_flags = {
 diff --git a/swift/utils/build-script-impl b/swift/utils/build-script-impl
-index cb68af1031..51d031cd39 100755
+index c0cb01f66515..66e6f607efbb 100755
 --- a/swift/utils/build-script-impl
 +++ b/swift/utils/build-script-impl
-@@ -470,11 +470,11 @@ function set_build_options_for_host() {
+@@ -469,11 +469,11 @@ function set_build_options_for_host() {
+             fi
+             case ${host} in
+                 android-aarch64)
+-                    SWIFT_HOST_TRIPLE="aarch64-unknown-linux-android"
++                    SWIFT_HOST_TRIPLE="aarch64-unknown-linux-android${ANDROID_API_LEVEL}"
+                     llvm_target_arch="AArch64"
+                     ;;
+                 android-armv7)
+-                    SWIFT_HOST_TRIPLE="armv7-unknown-linux-androideabi"
++                    SWIFT_HOST_TRIPLE="armv7-unknown-linux-androideabi${ANDROID_API_LEVEL}"
+                     llvm_target_arch="ARM"
+                     ;;
+                 android-x86_64)
+diff --git a/swift/validation-test/lit.site.cfg.in b/swift/validation-test/lit.site.cfg.in
+index 6941938e1e16..7b969f7c4ae1 100644
+--- a/swift/validation-test/lit.site.cfg.in
++++ b/swift/validation-test/lit.site.cfg.in
+@@ -38,6 +38,7 @@ config.darwin_xcrun_toolchain = "@SWIFT_DARWIN_XCRUN_TOOLCHAIN@"
+ # --- Android Configuration ---
+ config.android_ndk_path = "@SWIFT_ANDROID_NDK_PATH@"
+ config.android_ndk_gcc_version = "@SWIFT_ANDROID_NDK_GCC_VERSION@"
++config.android_api_level = "@SWIFT_ANDROID_API_LEVEL@"
  
-     case ${host} in
-         android-aarch64)
--            SWIFT_HOST_TRIPLE="aarch64-unknown-linux-android"
-+            SWIFT_HOST_TRIPLE="aarch64-unknown-linux-android${ANDROID_API_LEVEL}"
-             llvm_target_arch="AArch64"
-             ;;
-         android-armv7)
--            SWIFT_HOST_TRIPLE="armv7-unknown-linux-androideabi"
-+            SWIFT_HOST_TRIPLE="armv7-unknown-linux-androideabi${ANDROID_API_LEVEL}"
-             llvm_target_arch="ARM"
-             ;;
-         linux-armv6)
+ # --- Windows MSVC Configuration ---
+ config.swift_stdlib_msvc_runtime = None
